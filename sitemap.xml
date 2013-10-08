@@ -1,0 +1,21 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>
+    <url>
+        <loc>
+            http://blog.0xfaded.com/blog/2013/10/08/using-go-reflection-to-create-a-typesafe-router/
+        </loc>
+        <lastmod>2013-10-08T16:17:40+11:00</lastmod>
+    </url>
+    <url>
+        <loc>http://blog.0xfaded.com/robots.txt</loc>
+        <lastmod>2013-10-08T11:42:15+11:00</lastmod>
+    </url>
+    <url>
+        <loc>http://blog.0xfaded.com/blog/archives/</loc>
+        <lastmod>2013-10-08T16:17:40+11:00</lastmod>
+    </url>
+    <url>
+        <loc>http://blog.0xfaded.com/</loc>
+        <lastmod>2013-10-08T16:17:40+11:00</lastmod>
+    </url>
+</urlset>

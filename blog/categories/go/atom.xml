@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: go | 0xfaded Blog]]></title>
+  <link href="http://blog.0xfaded.com/blog/categories/go/atom.xml" rel="self"/>
+  <link href="http://blog.0xfaded.com/"/>
+  <updated>2013-10-08T16:28:04+11:00</updated>
+  <id>http://blog.0xfaded.com/</id>
+  <author>
+    <name><![CDATA[Carl Chatfield]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[Using Go reflection to create a typesafe router]]></title>
+    <link href="http://blog.0xfaded.com/blog/2013/10/08/using-go-reflection-to-create-a-typesafe-router/"/>
+    <updated>2013-10-08T00:30:00+11:00</updated>
+    <id>http://blog.0xfaded.com/blog/2013/10/08/using-go-reflection-to-create-a-typesafe-router</id>
+    <content type="html"><![CDATA[<h2>Foreword</h2>
+
+<p>If you are simply looking for a regular expression based router to work with
+the Go <code>net/http</code> package, <a href="http://www.gorillatoolkit.org/pkg/mux">Gorilla Mux</a>
+is a mature option. This post is to demonstrate a simple use case for
+reflection in Go.</p>
+
+<h2>Motivation</h2>
+
+<p>One feature of many web frameworks lacking from Go&rsquo;s <code>net/http</code> package is URL
+routing based on regular expressions. As an example, user code might listen for
+requests to <code>/user/(id=[0-9]+)/</code> and expect to be invoked when paths like
+<code>/user/1</code> and <code>/user/42</code> are requested.</p>
+
+<p><a href="https://github.com/gorilla/mux">Several</a>
+<a href="https://github.com/stretchr/goweb">other</a>
+implementations already exist that extract a <code>map[string]string</code>
+containing the (named) dynamic parts of the URL. This map is then passed
+to user code which handles the request. Using reflection, we can go
+one better and provide the user code with a pre-populated struct. As an
+added bonus, the routes can be made type safe based on the struct fields.</p>
+
+<h2>Registering Routes</h2>
+
+<p>As done in the <code>net/http</code> package, handlers listen to routes defined by a pattern.
+In addition, the handler will also need to register the format it expects to
+receive the dynamic components of the URL, so called URL parameters. I have
+chosen to have the registering code provide a zero value struct that the router
+inspects via reflection.</p>
+
+<p>``` go</p>
+
+<pre><code>type DoParams struct {
+    UserId int64 `rhttp:"id"`
+}
+func Do(w http.ResponseWriter, r *http.Request, i interface{}) {
+    ...
+}
+func main() {
+    router := rhttp.NewRouter()
+    router.HandleFunc("/user/(id=.*)", Do, &amp;DoParams{})
+    ...
+}
+</code></pre>
+
+<p>```</p>
+
+<p>Note the use of the <code>`rhttp:"id"`</code> struct tag which is used to name the
+the parameter.</p>
+
+<h2>Inspecting the Params</h2>
+
+<p>Go makes reflection a straight forward process. The first step is to validate
+that <code>params</code> is indeed a pointer to a struct (this is merely a requirement
+of my implementation). There is also the possibility of a nil interface, or
+an interface containing a nil pointer. The two possibilities are distinct,
+similar to the way an empty slice and a nil slice differ. I won&rsquo;t go into
+the details.
+``` go</p>
+
+<pre><code>func readParams(params {}interface) (...) {
+    v := reflect.ValueOf(params)
+    if params == nil || v.Kind() == reflect.Ptr &amp;&amp; v.IsNil() {
+        return
+    }
+    ...
+</code></pre>
+
+<p><code>
+This snippet introduces `Value.Kind()`, which may seem odd as a pointer is
+usually referred to as a `Type`. In type theory, a type is simply a set of
+values, and a kind is a set of types. Types in Go are user defined, one can
+define `T1` and `T2` as follows:
+</code> go</p>
+
+<pre><code>type T1 int
+type T2 int
+</code></pre>
+
+<p><code>``
+Without getting bogged down in theory,</code>T1<code>and</code>T2<code>are both of kind</code>int`. We
+don&rsquo;t care what type of pointer we are inspecting, we do care that it is a
+pointer.</p>
+
+<p>Assuming our pointer is non-nil, accessing the underlying struct is now straight
+forward.</p>
+
+<p>``` go</p>
+
+<pre><code>...
+if v.Kind() == reflect.Ptr {
+    v = v.Elem() // dereference the pointer
+} else {
+    err = errors.New(fmt.Sprintf("params not a struct pointer (%s)", v.Kind()))
+    return
+}
+if v.Kind() != reflect.Struct {
+    err = errors.New(fmt.Sprintf("*params is not a struct (%s)", v.Kind()))
+    return
+}
+...
+</code></pre>
+
+<p>```</p>
+
+<p>Traversing over the struct is also pleasantly simple. Parameters are named
+either explicitly by a rhttp tag, or in its absence the field name.</p>
+
+<p>``` go</p>
+
+<pre><code>...
+paramsType = v.Type()
+for i := 0; i &lt; paramsType.NumField(); i += 1 {
+    field := paramsType.Field(i)
+    if tag := field.Tag.Get("rhttp"); len(tag) != 0 {
+        // Add a parameter to scope with name `tag'
+    } else if isValidName(field.Name) {
+        // Add a parameter to scope with name `field.Name'
+    }
+}
+...
+</code></pre>
+
+<p>```</p>
+
+<h2>Building Params</h2>
+
+<p>For thread safety, a params struct is allocated per invocation. The URL is
+parsed for its dynamic components, and each is assigned to a designated struct
+field. The designation here has been precomputed as <code>paramsIndex</code>, and the
+slice of string parameter values is <code>vals</code>. An error is returned if a field&rsquo;s
+type prevents a value from being parsed.</p>
+
+<p>``` go</p>
+
+<pre><code>params := reflect.New(paramsType)
+for f, v := range paramsIndex {
+    value := params.Elem().Field(f)
+    switch value.Type().Kind() {
+    case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+        if val, err := strconv.ParseInt(vals[v], 10, value.Type().Bits()); err != nil {
+            return nil, err
+        } else {
+            value.SetInt(val)
+        }
+    case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+        ...
+    }
+}
+return params.Interface(), nil
+</code></pre>
+
+<p><code>``
+One useful trick for when marshalling strings into data is the use of</code>Type.Bits()<code>
+to determine the bit width of the underlying type. This may be enough to save from
+handling each width separately, as above. The final step is to create a
+</code>interface{}<code>with</code>Value.Interface()` usable by regular code.</p>
+
+<h2>Recovering Params in User Code</h2>
+
+<p>Unfortunately, Go&rsquo;s type system is not powerful enough to pass the struct pointer
+directly back to user code, and must pass an <code>interface{}</code> instead. Even Haskell
+would require its <a href="http://en.wikibooks.org/wiki/Haskell/GADT">GADT&rsquo;s</a> extension
+to achieve this. Therefore, the user is going to have to make a runtime type
+assertion and convert the interface back to the registered struct type. A
+complete example below.</p>
+
+<p>``` go</p>
+
+<pre><code>type Id int64
+type DoParams struct {
+    UserId Id `rhttp:"id"`
+    Action string `rhttp:"targ"`
+    ...
+}
+func Do(w http.ResponseWriter, r *http.Request, i interface{}) {
+    params := i.(*DoParams)
+    ...
+}
+func main() {
+    router := rhttp.NewRouter()
+    router.HandleFunc("/user/(id=.*)/action/(targ=[abc])", Do, &amp;DoParams{})
+    http.Handle("/", router)
+}
+</code></pre>
+
+<p>```</p>
+
+<h2>Conclusion</h2>
+
+<p>Go makes reflection a first class usage pattern, which my limited experience
+tells me is capable of replicating functionality of languages with more
+sophisticated type systems such as Haskell or C++. The downside is that
+reflection is available only at runtime, unlike templates or other type system
+sorcery seen in various functional languages. The upside is the simplicity and
+ease of use which aligns with Go&rsquo;s philosophy of making small performance
+sacrifices for usability gains.</p>
+
+<p>The code for the router is available on <a href="https://github.com/0xfaded/rhttp">github</a>
+and obviously includes substantially more machinery than has been shown. The
+only true advantage over existing solutions is the automatic unmarshalling of
+parameters, although this does allow neat tricks like overloading patterns with
+two handlers accepting differently typed parameters. The resolution process
+uses binary search to match the non-dynamic parts of the expression, which
+may be of interest if you have thousands of routes defined. Other packages that
+I&rsquo;ve looked at, including the built-in <code>net/http</code>, check every registered pattern.</p>
+
+<p>I still recommend using a more mainstream solution though.</p>
+]]></content>
+  </entry>
+  
+</feed>
